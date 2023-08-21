@@ -50,6 +50,7 @@ class PredictionModel(nn.Module):
         # Get output.
         out, _ = self.lstm(x, (h0, c0))
         out = self.fc(out[:, -1, :])
+        return out
 
 
 
@@ -73,8 +74,28 @@ class TimeSeriesData(Dataset):
 class PyTorchPredictor:
     def __init__(self) -> None:
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        # Number of candles to search before the current candle. 
+        self.lookback = 7
+        # Number of elements to be included in one batch.
+        self.batch_size = 16
+
+        # Set train_looder & test_loader to None
+        self.train_loader = None
+        self.test_loader = None
+        self.X_train, self.X_test = None, None
+        self.y_train, self.y_test = None, None
+        self.model = None
+        self.optimizer = None
+        # Create a scaler with a range of -1 to 1. 
+        self.scaler = MinMaxScaler(feature_range=(-1,1))
+
+        # Set the loss function 
+        self.loss_function = nn.MSELoss()
+
+        # Set the learning rate
+        self.learning_rate = 0.001
     '''------------------------------------'''
-    def format_data(self, df: pd.DataFrame):
+    def set_parameters(self, df: pd.DataFrame):
         # Turn date column to pandas date type.
         df["time"] = pd.to_datetime(df["time"])
         df = df[["time", "close"]]
@@ -84,10 +105,9 @@ class PyTorchPredictor:
         shifted_df = self.prepare_dataframe_for_LSTM(df, n_steps=lookback)
         shifted_df = shifted_df.to_numpy()
 
-        # Create a scaler with a range of -1 to 1. 
-        scaler = MinMaxScaler(feature_range=(-1,1))
+        
         # Fit the data to be within the feature range. 
-        shifted_df = scaler.fit_transform(shifted_df)
+        shifted_df = self.scaler.fit_transform(shifted_df)
 
         # Get all of the rows from the second column + any columns that follow. 
         X = shifted_df[:, 1:]
@@ -117,26 +137,38 @@ class PyTorchPredictor:
         y_test = y_test.reshape((-1, 1))
 
         # Create PyTorch tensors.
-        X_train = torch.tensor(X_train).float()
-        y_train = torch.tensor(y_train).float()
-        X_test = torch.tensor(X_test).float()
-        y_test = torch.tensor(y_test).float()
+        self.X_train = torch.tensor(X_train).float()
+        self.y_train = torch.tensor(y_train).float()
+        self.X_test = torch.tensor(X_test).float()
+        self.y_test = torch.tensor(y_test).float()
 
         # Create datasets from the training and testing data
-        train_dataset = TimeSeriesData(X_train, y_train)
-        test_dataset = TimeSeriesData(X_test, y_test)
+        train_dataset = TimeSeriesData(self.X_train, self.y_train)
+        test_dataset = TimeSeriesData(self.X_test, self.y_test)
 
-        batch_size = 16
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
-
-        for _, batch in enumerate(train_loader):
-            x_batch, y_batch = batch[0].to(self.device), batch[1].to(self.device)
-            break
+        self.train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
+        self.test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=True)
 
 
         
 
+    '''------------------------------------'''
+    def set_model(self, input_layer, hidden_layer, stacked_layers):
+        self.model = PredictionModel(input_size=input_layer, hidden_size=hidden_layer, num_stacked_layers=stacked_layers)
+        if self.optimizer == None:
+            self.set_optimizer()
+    '''------------------------------------'''
+    def get_model(self):
+        return self.model
+    '''------------------------------------'''
+    def set_optimizer(self):
+        if self.model != None:
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        else:
+            raise("[Error] Model has not been initiated yet. Optimizer cannot be created.")
+    '''------------------------------------'''
+    def get_optimizer(self):
+        return self.optimizer
     '''------------------------------------'''
     def prepare_dataframe_for_LSTM(self, df: pd.DataFrame, n_steps: int):
         df = deepcopy(df)
@@ -154,6 +186,119 @@ class PyTorchPredictor:
         for _, batch in enumerate(loader):
             x_batch, y_batch = batch[0].to(self.device), batch[1].to(self.device)
             break
+    
+    '''------------------------------------'''
+    def train_epochs(self, num_epochs: int = 10):
+        
+        for epoch in range(num_epochs):
+            self.train_one_epoch(epoch=epoch)
+            self.validate_one_epoch()
+
+    '''------------------------------------'''
+    def train_one_epoch(self, epoch: int):
+
+        if self.train_loader != None:
+            self.model.train(True)
+            print(f"Epoch: {epoch+1}")
+            running_loss = 0.0
+
+            for batch_index, batch in enumerate(self.train_loader):
+                x_batch, y_batch = batch[0].to(self.device), batch[1].to(self.device)
+                output = self.model(x_batch)
+                loss = self.loss_function(output, y_batch)
+                running_loss += loss.item()
+                self.optimizer.zero_grad()
+                # Iterate a backward pass through the loss to get the gradient. 
+                loss.backward()
+                # Step in the direction of the gradient to improve model. 
+                self.optimizer.step()
+
+                if batch_index % 100 == 0: # print every 100 batches.
+                    avg_loss_accross_batches = running_loss / 100
+                    print(f"Batch: {batch_index+1}, Loss: {'{0:.3f}'.format(avg_loss_accross_batches)}")
+
+                    running_loss = 0.0
+        else:
+            raise("[Error] Model parameters need to be set first.")
+    '''------------------------------------'''
+    def validate_one_epoch(self):
+        if self.test_loader != None:
+            # Put it in false since we are not training, but evaluating. 
+            self.model.train(False)
+            running_loss = 0.0
+
+            for batch_index ,batch in enumerate(self.test_loader):
+                x_batch, y_batch = batch[0].to(self.device), batch[1].to(self.device)
+
+                with torch.no_grad():
+                    output = self.model(x_batch)
+                    loss = self.loss_function(output, y_batch)
+                    running_loss += loss
+            avg_loss_across_batches = running_loss / len(self.test_loader)
+            print(f"Val loss: {'{0:.3f}'.format(avg_loss_across_batches)}")
+            print(f"**********************************************************")
+        else:
+            raise("[Error] Model parameters need to be set first.")
+    '''------------------------------------'''
+    def plot_predictions_train(self):
+
+        if self.X_train != None and self.y_train != None:
+
+            with torch.no_grad():
+                predicted = self.model(self.X_train.to(self.device)).to("cpu").numpy()
+                train_predictions = predicted.flatten()
+
+                # Create an empty numpy array for X_train that is the shape that the scaler accepts. 
+                x_array = np.zeros((self.X_train.shape[0], self.lookback+1))
+                x_array[:, 0] = train_predictions
+                x_array = self.scaler.inverse_transform(x_array)
+
+                # Copy data back
+                train_predictions = deepcopy(x_array[:, 0])
+
+                # Create another empty array for y_train
+                y_array = np.zeros((self.X_train.shape[0], self.lookback+1))
+                y_array[:, 0] = self.y_train.flatten()
+                y_array = self.scaler.inverse_transform(y_array)
+
+                new_y_train = deepcopy(y_array[:, 0])
+
+            plt.plot(new_y_train, label="Actual Close")
+            plt.plot(train_predictions, label="Predicted Close")
+            plt.xlabel("Day")
+            plt.ylabel("Close")
+            plt.legend()
+            plt.show()
+        else:
+            raise("[Error] Parameters have not been set, and model has not been trained. ")
+
+    '''------------------------------------'''
+    def plot_predictions_test(self):
+        if self.X_test != None and self.y_test != None:
+            test_predictions = self.model(self.X_test.to(self.device)).detach().cpu().numpy().flatten()
+            # Create empty numpy array for X_test to fit into scaler. 
+            # The scaler will inverse the scaling and take the value within the feature range to it's original value. 
+            x_array = np.zeros((self.X_test.shape[0], self.lookback+1))
+            x_array[:, 0] = test_predictions
+            x_array = self.scaler.inverse_transform(x_array)
+            test_predictions = deepcopy(x_array[:, 0])
+            # Create empty numpy array for y_test to fit into scaler. 
+            y_array = np.zeros((self.X_test.shape[0], self.lookback+1))
+            y_array[:, 0] = self.y_test.flatten()
+            y_array = self.scaler.inverse_transform(y_array)
+            new_y_test = deepcopy(y_array[:, 0])
+
+            plt.plot(new_y_test, label="Actual Close")
+            plt.plot(test_predictions, label="Predicted Close")
+            plt.xlabel("Day")
+            plt.ylabel("Close")
+            plt.legend()
+            plt.show()
+
+            
+
+        else:
+            raise("[Error] Parameters have not been set, and model has not been trained. ")
     '''------------------------------------'''
     '''------------------------------------'''
     '''------------------------------------'''
@@ -170,12 +315,10 @@ class PyTorchPredictor:
     '''------------------------------------'''
     '''------------------------------------'''
     '''------------------------------------'''
-    '''------------------------------------'''
-    '''------------------------------------'''
-    '''------------------------------------'''
-    '''------------------------------------'''
-    '''------------------------------------'''
-    '''------------------------------------'''
+
+'''------------------------------------'''
+'''------------------------------------'''
+'''------------------------------------'''
 
 
 if __name__ == "__main__":
