@@ -1,4 +1,5 @@
-
+# Request related imports
+import requests
 
 # Time & Date related imports
 import datetime as dt
@@ -10,10 +11,21 @@ from dateutil import parser
 # Pandas related imports
 import pandas as pd
 
+# Alpha vantage imports
+import alphavantage_api_client
+
+# Technical indicators library 
+from DataSources.technical_indicators import TechnicalIndicators
+
 
 # CCXT related imports
 import ccxt
 from ccxt.base.errors import BadSymbol
+
+# Load environment variables
+import os
+from dotenv import load_dotenv, dotenv_values
+load_dotenv()
 
 
 
@@ -26,6 +38,8 @@ class CryptoData:
     def __init__(self, ticker: str, exchange: str = "Kraken") -> None:
         self.ticker = ticker
         self.exchange = getattr(ccxt, exchange.lower())()
+        self.ta = TechnicalIndicators()
+        #self.av_client = alphavantage_api_client.ApiClient(os.getenv("alpha_vantage_key"))
     '''------------------------------------'''
     def get_OHLCV_data(self, market:str = "USD", timeframe: str = "5m", limit: int = 1000, convert_to_local_tz: bool = True):
         try:
@@ -65,6 +79,17 @@ class CryptoData:
         converted_time = timestamp.astimezone(to_zone)
         return converted_time
     '''------------------------------------'''
+    def get_alpha_vantage_candles(self, ticker: str):
+        symbol = ticker
+        interval = "5min"
+        
+
+
+        url = 'https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={}&interval={}&apikey={}'.format("IBM",interval,os.getenv("alpha_vantage_key"))
+        r = requests.get(url)
+        data = r.json()
+        print(f"Data: {data}")
+
     '''------------------------------------'''
     '''------------------------------------'''
     '''------------------------------------'''

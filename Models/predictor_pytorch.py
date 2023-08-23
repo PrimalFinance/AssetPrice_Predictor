@@ -1,6 +1,9 @@
+# Operating system related imports
+import os
 
-
-
+# Logging related imports
+import logging
+logging.basicConfig(level=logging.INFO, filename="model.log", filemode="w")
 # Number storage/manipulation imports
 import pandas as pd
 import numpy as np
@@ -8,6 +11,8 @@ import numpy as np
 
 # Graphing related imports
 import matplotlib.pyplot as plt
+
+1,920,000,000
 
 
 # PyTorch imports
@@ -20,6 +25,8 @@ from copy import deepcopy
 # Sklearn imports
 from sklearn.preprocessing import MinMaxScaler
 
+
+path_to_model = "D:\\Coding\\VisualStudioCode\\Projects\\Python\\AssetPrice_Predictor\\Models\\pytorch_predictor.pth"
 
 
 class PredictionModel(nn.Module):
@@ -72,12 +79,13 @@ class TimeSeriesData(Dataset):
 
 
 class PyTorchPredictor:
-    def __init__(self) -> None:
+    def __init__(self, lookback: int = 7, batch_size: int = 16, train_size: float = 0.95) -> None:
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
         # Number of candles to search before the current candle. 
-        self.lookback = 7
+        self.lookback = lookback
         # Number of elements to be included in one batch.
-        self.batch_size = 16
+        self.batch_size = batch_size
+        self.train_size = train_size
 
         # Set train_looder & test_loader to None
         self.train_loader = None
@@ -89,11 +97,53 @@ class PyTorchPredictor:
         # Create a scaler with a range of -1 to 1. 
         self.scaler = MinMaxScaler(feature_range=(-1,1))
 
+        # Pre-determined values for layers
+        self.input_layer = 1
+        self.hidden_layer = 4
+        self.stacked_layer = 1
+
         # Set the loss function 
         self.loss_function = nn.MSELoss()
 
         # Set the learning rate
-        self.learning_rate = 0.001
+        self.learning_rate = 0.0005
+
+    '''------------------------------------'''
+    def set_model(self, input_layer: int = 0, hidden_layer: int = 0, stacked_layers: int = 0):
+        
+        # If no args are passed in the parameter, use default class values. 
+        if input_layer == 0 and hidden_layer == 0:
+            self.model = PredictionModel(input_size=self.input_layer, hidden_size=self.hidden_layer, num_stacked_layers=self.stacked_layer)
+        else:
+            self.model = PredictionModel(input_size=input_layer, hidden_size=hidden_layer, num_stacked_layers=stacked_layers)
+        if self.optimizer == None:
+            self.set_optimizer()
+    '''------------------------------------'''
+    def get_model(self):
+        return self.model
+    '''------------------------------------'''
+    def set_optimizer(self):
+        if self.model != None:
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        else:
+            raise("[Error] Model has not been initiated yet. Optimizer cannot be created.")
+    '''------------------------------------'''
+    def get_optimizer(self):
+        return self.optimizer
+    '''------------------------------------'''
+    def save_model(self):
+        if self.model == None:
+            self.set_model(self.input_layer, self.hidden_layer, self.stacked_layer)
+        
+        torch.save(self.model.state_dict(), path_to_model)
+        print(f"[Model Saved]")
+    '''------------------------------------'''
+    def load_model(self):
+        self.model = PredictionModel(input_size=self.input_layer, hidden_size=self.hidden_layer, num_stacked_layers=self.stacked_layer)
+        self.model.load_state_dict(torch.load(path_to_model))
+        if self.optimizer == None:
+            self.set_optimizer()
+        print(f"[Model Loaded]")
     '''------------------------------------'''
     def set_parameters(self, df: pd.DataFrame):
         # Turn date column to pandas date type.
@@ -121,7 +171,7 @@ class PyTorchPredictor:
         # This is because the data needs to be in a sequential order. 
         X = deepcopy(np.flip(X, axis=1))
         # Create a index to determine length of training data.
-        split_index = int(len(X) * 0.95)
+        split_index = int(len(X) * self.train_size)
         # Create training data that includes every index up to "split_index"
         X_train = X[:split_index]
         # Create test data that includes the elements at "split_index" + any elements that follow it. 
@@ -150,25 +200,6 @@ class PyTorchPredictor:
         self.test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=True)
 
 
-        
-
-    '''------------------------------------'''
-    def set_model(self, input_layer, hidden_layer, stacked_layers):
-        self.model = PredictionModel(input_size=input_layer, hidden_size=hidden_layer, num_stacked_layers=stacked_layers)
-        if self.optimizer == None:
-            self.set_optimizer()
-    '''------------------------------------'''
-    def get_model(self):
-        return self.model
-    '''------------------------------------'''
-    def set_optimizer(self):
-        if self.model != None:
-            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
-        else:
-            raise("[Error] Model has not been initiated yet. Optimizer cannot be created.")
-    '''------------------------------------'''
-    def get_optimizer(self):
-        return self.optimizer
     '''------------------------------------'''
     def prepare_dataframe_for_LSTM(self, df: pd.DataFrame, n_steps: int):
         df = deepcopy(df)
@@ -199,7 +230,7 @@ class PyTorchPredictor:
 
         if self.train_loader != None:
             self.model.train(True)
-            print(f"Epoch: {epoch+1}")
+            logging.info(f"Epoch: {epoch+1}")
             running_loss = 0.0
 
             for batch_index, batch in enumerate(self.train_loader):
@@ -213,9 +244,9 @@ class PyTorchPredictor:
                 # Step in the direction of the gradient to improve model. 
                 self.optimizer.step()
 
-                if batch_index % 100 == 0: # print every 100 batches.
+                if batch_index % 100 == 99: # print every 100 batches.
                     avg_loss_accross_batches = running_loss / 100
-                    print(f"Batch: {batch_index+1}, Loss: {'{0:.3f}'.format(avg_loss_accross_batches)}")
+                    logging.info(f"Batch: {batch_index+1}, Loss: {'{0:.3f}'.format(avg_loss_accross_batches)}")
 
                     running_loss = 0.0
         else:
@@ -235,8 +266,8 @@ class PyTorchPredictor:
                     loss = self.loss_function(output, y_batch)
                     running_loss += loss
             avg_loss_across_batches = running_loss / len(self.test_loader)
-            print(f"Val loss: {'{0:.3f}'.format(avg_loss_across_batches)}")
-            print(f"**********************************************************")
+            logging.info(f"Val loss: {'{0:.5f}'.format(avg_loss_across_batches)}")
+            logging.info(f"**********************************************************")
         else:
             raise("[Error] Model parameters need to be set first.")
     '''------------------------------------'''
@@ -265,7 +296,7 @@ class PyTorchPredictor:
 
             plt.plot(new_y_train, label="Actual Close")
             plt.plot(train_predictions, label="Predicted Close")
-            plt.xlabel("Day")
+            plt.xlabel("Minute")
             plt.ylabel("Close")
             plt.legend()
             plt.show()
@@ -290,7 +321,7 @@ class PyTorchPredictor:
 
             plt.plot(new_y_test, label="Actual Close")
             plt.plot(test_predictions, label="Predicted Close")
-            plt.xlabel("Day")
+            plt.xlabel("Minute")
             plt.ylabel("Close")
             plt.legend()
             plt.show()
@@ -299,8 +330,7 @@ class PyTorchPredictor:
 
         else:
             raise("[Error] Parameters have not been set, and model has not been trained. ")
-    '''------------------------------------'''
-    '''------------------------------------'''
+    
     '''------------------------------------'''
     '''------------------------------------'''
     '''------------------------------------'''
