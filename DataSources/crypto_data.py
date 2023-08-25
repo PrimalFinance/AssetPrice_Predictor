@@ -56,6 +56,8 @@ class CryptoData:
             candles_df['$volume'] = candles_df['volume'] * candles_df['close']
             # Format timestamps column. 
             candles_df['time'] = pd.to_datetime(candles_df['time'], unit='ms')
+            # Create a percent change column that tracks the percent change from candle-to-candle.
+            candles_df["close_pct_change"] = candles_df["close"].pct_change() * 100
             # Convert timestamps to local time.
             if convert_to_local_tz:
                 candles_df['time'] = [self.convert_to_local_timezone(i) for i in candles_df['time']] 
@@ -83,8 +85,6 @@ class CryptoData:
         symbol = ticker
         interval = "5min"
         
-
-
         url = 'https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={}&interval={}&apikey={}'.format("IBM",interval,os.getenv("alpha_vantage_key"))
         r = requests.get(url)
         data = r.json()

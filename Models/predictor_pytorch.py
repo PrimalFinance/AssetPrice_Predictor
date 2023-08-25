@@ -12,7 +12,6 @@ import numpy as np
 # Graphing related imports
 import matplotlib.pyplot as plt
 
-1,920,000,000
 
 
 # PyTorch imports
@@ -146,6 +145,8 @@ class PyTorchPredictor:
         print(f"[Model Loaded]")
     '''------------------------------------'''
     def set_parameters(self, df: pd.DataFrame):
+
+        print(f"First: {df}")
         # Turn date column to pandas date type.
         df["time"] = pd.to_datetime(df["time"])
         df = df[["time", "close"]]
@@ -161,6 +162,8 @@ class PyTorchPredictor:
 
         # Get all of the rows from the second column + any columns that follow. 
         X = shifted_df[:, 1:]
+
+        print(f"X: {X}")
         # Get all of the rows from only first column. This is our predictor column.
         # Another note: X.shape = (1000 rows, 7 columns) *if look back is 7. 
         # y.shape (1000 rows,) because there is only 1 column. 
